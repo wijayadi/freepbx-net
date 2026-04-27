@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+  </PropertyGroup>
+
+  <!-- Common build targets -->
+  <Target Name="PrintVersion" BeforeTargets="Build;Rebuild;Clean">
+    <Message Text="Building version $(Version) from $(MSBuildThisFileName)" Importance="high" />
+  </Target>
+</Project>

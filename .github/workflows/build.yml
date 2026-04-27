@@ -1,0 +1,62 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOTNET_VERSION: '8.0.x'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore Sengsara.Freepbx.sln
+
+    - name: Build
+      run: dotnet build Sengsara.Freepbx.sln --configuration Release --no-restore
+
+    - name: Test
+      run: dotnet test Sengsara.Freepbx.sln --configuration Release --no-build --verbosity normal
+
+    - name: Pack
+      run: |
+        dotnet pack src/Sengsara.Freepbx.Abstractions/Sengsara.Freepbx.Abstractions.csproj --configuration Release --no-build -o ./artifacts
+        dotnet pack src/Sengsara.Freepbx/Sengsara.Freepbx.csproj --configuration Release --no-build -o ./artifacts
+        dotnet pack src/Sengsara.Freepbx.SourceGen/Sengsara.Freepbx.SourceGen.csproj --configuration Release --no-build -o ./artifacts
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: artifacts/*.nupkg
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Run code analysis
+      run: |
+        dotnet tool restore
+        dotnet tool run dotnet-format -- verify --no-restore
+      continue-on-error: true

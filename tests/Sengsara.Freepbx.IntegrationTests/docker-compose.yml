@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  freepbx:
+    image: sigalor/freepbx:17
+    container_name: freepbx-test
+    environment:
+      - FREEPBX_IP=0.0.0.0
+      - AST_HOSTNAME=freepbx.local
+      - AST_PASSWORD=amp111
+      - AMPADMIN_PASSWORD=admin
+    ports:
+      - "8080:8080"
+      - "5060:5060"
+      - "5061:5061"
+    volumes:
+      - freepbx-data:/var/www
+    networks:
+      - freepbx-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/admin/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  freepbx-graphql:
+    image: ghcr.io/sengsara/freepbx-graphql:latest
+    container_name: freepbx-graphql-test
+    depends_on:
+      freepbx:
+        condition: service_healthy
+    environment:
+      - FREEPBX_URL=http://freepbx:8080
+      - FREEPBX_API_KEY=test-api-key
+    ports:
+      - "4000:4000"
+    networks:
+      - freepbx-test-network
+
+volumes:
+  freepbx-data:
+
+networks:
+  freepbx-test-network:
+    driver: bridge

@@ -1,0 +1,24 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Authors>Sengsara</Authors>
+    <Company>Sengsara</Company>
+    <Copyright>Copyright © 2024 Sengsara</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/wijayadi/freepbx-net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors />
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>true</EnableDefaultEmbeddedResourceItems>
+  </PropertyGroup>
+</Project>
