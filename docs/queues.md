@@ -1,109 +1,73 @@
 # Queues
 
-Queues manage call distribution to multiple extensions.
+On FreePBX 17 the queue module is **not** exposed through GraphQL. `client.Queues`
+therefore uses the REST API (`/admin/api/api/rest/queues`). Your OAuth client must
+have the `rest` scope.
 
-## Getting Queues
+The REST API exposes queue configuration for reading and membership for reading
+and writing. Creating, updating, or deleting queue configuration is not available
+through the API on FreePBX 17 and must be done in the GUI or with `fwconsole`.
 
-### Get All Queues
+## Read queues
 
 ```csharp
 var queues = await client.Queues.GetAllAsync();
-```
-
-### Get Queue by ID
-
-```csharp
-var queue = await client.Queues.GetByIdAsync("500");
-```
-
-### Get Queue Members
-
-```csharp
-var members = await client.Queues.GetMembersAsync("500");
-```
-
-## Creating Queues
-
-```csharp
-var request = new CreateQueueRequest
+foreach (var queue in queues)
 {
-    Extension = "500",
-    Description = "Sales Queue",
-    Strategy = "ringall",
-    MaxMembers = 10,
-    Timeout = 30,
-    Weight = 0,
-    WrapupTime = 10,
-    Autofill = true,
-    MusicOnHold = "default"
-};
+    Console.WriteLine($"{queue.Extension}: {queue.Name}");
+}
 
-var created = await client.Queues.CreateAsync(request);
+// Full settings for a single queue (raw FreePBX fields are captured in
+// AdditionalSettings).
+var queue = await client.Queues.GetByIdAsync("1001");
 ```
 
-## Updating Queues
+## Read members
 
 ```csharp
-var request = new UpdateQueueRequest
+var members = await client.Queues.GetMembersAsync("1001");
+
+Console.WriteLine("Static:  " + string.Join(", ", members.Static));
+Console.WriteLine("Dynamic: " + string.Join(", ", members.Dynamic));
+
+// Members for every queue, keyed by queue number.
+var all = await client.Queues.GetAllMembersAsync();
+```
+
+## Change members
+
+```csharp
+// Replace the full member list.
+await client.Queues.SetMembersAsync("1001", new QueueMembers
 {
-    Description = "Premium Support Queue",
-    Strategy = "leastrecent",
-    MaxMembers = 5
-};
+    Static = ["101", "102"],
+    Dynamic = ["110"]
+});
 
-var updated = await client.Queues.UpdateAsync("500", request);
+// Add / remove a single member.
+await client.Queues.AddMemberAsync("1001", "103");
+await client.Queues.AddMemberAsync("1001", "110", dynamic: true, penalty: 5);
+await client.Queues.RemoveMemberAsync("1001", "103");
 ```
 
-## Deleting Queues
+Changing members triggers a FreePBX configuration reload.
 
-```csharp
-var deleted = await client.Queues.DeleteAsync("500");
-```
+## Models
 
-## Managing Queue Members
-
-### Add Member
-
-```csharp
-var request = new AddQueueMemberRequest
-{
-    Extension = "1001",
-    Penalty = "0",
-    Paused = false
-};
-
-var added = await client.Queues.AddMemberAsync("500", request);
-```
-
-### Remove Member
-
-```csharp
-var removed = await client.Queues.RemoveMemberAsync("500", "1001");
-```
-
-## Queue Model
+`QueueDto`
 
 | Property | Type | Description |
 |----------|------|-------------|
-| Id | string | Unique identifier |
-| Extension | string | Queue extension number |
-| Description | string | Queue description |
-| Password | string? | Queue password (if any) |
-| MaxMembers | int? | Maximum members |
-| Timeout | int? | Call timeout (seconds) |
-| Strategy | string? | Ring strategy (ringall, roundrobin, etc.) |
-| Weight | int? | Queue weight |
-| WrapupTime | int? | Wrap-up time after call |
-| Autofill | bool? | Auto-fill strategy |
-| MusicOnHold | string? | Music on hold class |
-| Enabled | bool | Whether queue is enabled |
+| `Extension` | string | Queue number |
+| `Name` | string? | Queue name |
+| `Members` | `List<string>?` | Static members (single queue reads) |
+| `DynamicMembers` | `List<string>?` | Dynamic members (single queue reads) |
+| `AdditionalSettings` | `Dictionary<string, JsonElement>?` | All other FreePBX queue fields |
 
-## Ring Strategies
+`QueueMembers`
 
-- `ringall` - Ring all available agents
-- `leastrecent` - Ring agent with least recent call
-- `fewestcalls` - Ring agent with fewest calls
-- `random` - Ring random agent
-- `rrmemory` - Round-robin with memory
-- `linear` - Ring in order of configuration
-- `wrandom` - Random with weight
+| Property | Type | Description |
+|----------|------|-------------|
+| `Static` | `List<string>` | Static members |
+| `Dynamic` | `List<string>` | Dynamic members |
+| `Count` | int | Total members |

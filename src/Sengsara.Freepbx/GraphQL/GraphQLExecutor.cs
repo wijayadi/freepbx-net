@@ -1,148 +1,222 @@
-using System;
-using System.Collections.Generic;
-using System.Net.Http;
+using System.Net;
+using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Sengsara.Freepbx.Abstractions.Exceptions;
 using Sengsara.Freepbx.Abstractions.Interfaces;
-using GraphQL.Client.Http;
-using GraphQL.Client.Serializer.SystemTextJson;
-using GraphQLRequest = GraphQL.GraphQLRequest;
-using GraphQLError = GraphQL.GraphQLError;
+using Sengsara.Freepbx.Abstractions.Models;
+using Sengsara.Freepbx.Serialization;
 
 namespace Sengsara.Freepbx.GraphQL;
 
 /// <summary>
-/// Executes GraphQL queries against the FreePBX API
+/// Executes GraphQL operations against the FreePBX GraphQL endpoint.
 /// </summary>
-public class GraphQLExecutor : IGraphQLExecutor
+public sealed class GraphQLExecutor : IGraphQLExecutor
 {
-    private readonly GraphQLHttpClient _client;
+    private readonly HttpClient _httpClient;
+    private readonly Uri _endpoint;
     private readonly ILogger<GraphQLExecutor>? _logger;
+    private readonly bool _retry;
+    private readonly int _maxRetryAttempts;
 
-    public GraphQLExecutor(HttpClient httpClient, Abstractions.Interfaces.FreepbxClientOptions options, ILogger<GraphQLExecutor>? logger = null)
+    /// <summary>
+    /// Creates a new GraphQL executor.
+    /// </summary>
+    /// <param name="httpClient">Authenticated HTTP client.</param>
+    /// <param name="options">Client options.</param>
+    /// <param name="logger">Optional logger.</param>
+    public GraphQLExecutor(HttpClient httpClient, FreepbxClientOptions options, ILogger<GraphQLExecutor>? logger = null)
     {
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _endpoint = options.GraphQLUri;
         _logger = logger;
-
-        var serializer = new SystemTextJsonSerializer(new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        });
-
-        var clientOptions = new GraphQLHttpClientOptions
-        {
-            EndPoint = new Uri(options.Endpoint)
-        };
-        
-        _client = new GraphQLHttpClient(clientOptions, serializer, httpClient);
-
-        // Add authentication
-        if (!string.IsNullOrWhiteSpace(options.ApiKey))
-        {
-            _client.HttpClient.DefaultRequestHeaders.Add("X-API-Key", options.ApiKey);
-        }
+        _retry = options.EnableRetry;
+        _maxRetryAttempts = options.MaxRetryAttempts;
     }
 
     /// <inheritdoc />
-    public async Task<TResponse> ExecuteQueryAsync<TResponse>(
-        string query,
-        Dictionary<string, object?>? variables = null,
-        CancellationToken cancellationToken = default)
-    {
-        _logger?.LogDebug("Executing GraphQL query: {Query}", query);
+    public Task<TResponse> ExecuteQueryAsync<TResponse>(string query, object? variables = null, CancellationToken cancellationToken = default)
+        => ExecuteAsync<TResponse>(query, variables, cancellationToken);
 
-        var request = new GraphQLRequest
+    /// <inheritdoc />
+    public Task<TResponse> ExecuteMutationAsync<TResponse>(string mutation, object? variables = null, CancellationToken cancellationToken = default)
+        => ExecuteAsync<TResponse>(mutation, variables, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<GraphQLResult<TResponse>> TryExecuteQueryAsync<TResponse>(string query, object? variables = null, CancellationToken cancellationToken = default)
+    {
+        var response = await SendAsync(query, variables, cancellationToken).ConfigureAwait(false);
+        var errors = ReadErrors(response.Root);
+
+        TResponse? data = default;
+        if (response.Root.TryGetProperty("data", out var dataElement) &&
+            dataElement.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+        {
+            data = dataElement.Deserialize<TResponse>(FreepbxJson.Response);
+        }
+
+        return new GraphQLResult<TResponse>
+        {
+            Data = data,
+            Errors = errors,
+            RawBody = response.Body
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<JsonDocument> ExecuteRawAsync(string query, object? variables = null, CancellationToken cancellationToken = default)
+    {
+        var response = await SendAsync(query, variables, cancellationToken).ConfigureAwait(false);
+        ThrowIfErrors(response);
+
+        if (response.Root.TryGetProperty("data", out var data) &&
+            data.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+        {
+            return JsonDocument.Parse(data.GetRawText());
+        }
+
+        return JsonDocument.Parse("{}");
+    }
+
+    private async Task<TResponse> ExecuteAsync<TResponse>(string query, object? variables, CancellationToken cancellationToken)
+    {
+        var response = await SendAsync(query, variables, cancellationToken).ConfigureAwait(false);
+        ThrowIfErrors(response);
+
+        if (!response.Root.TryGetProperty("data", out var data) ||
+            data.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            throw new GraphQLException(
+                [new GraphQLError { Message = "The FreePBX GraphQL response did not contain any data." }],
+                response.Body,
+                response.StatusCode);
+        }
+
+        var result = data.Deserialize<TResponse>(FreepbxJson.Response);
+        if (result is null)
+        {
+            throw new GraphQLException(
+                [new GraphQLError { Message = $"Unable to deserialize the GraphQL response into {typeof(TResponse).Name}." }],
+                response.Body,
+                response.StatusCode);
+        }
+
+        return result;
+    }
+
+    private async Task<GraphQLResponseEnvelope> SendAsync(string query, object? variables, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            throw new ArgumentException("GraphQL query cannot be empty.", nameof(query));
+        }
+
+        var payload = new GraphQLRequestPayload
         {
             Query = query,
             Variables = variables
         };
 
-        var response = await _client.SendQueryAsync<TResponse>(request, cancellationToken);
+        var json = JsonSerializer.Serialize(payload, FreepbxJson.Request);
+        _logger?.LogDebug("Executing GraphQL request: {Query}", query);
 
-        if (response.Errors?.Any() == true)
+        var attempts = _retry ? Math.Max(1, _maxRetryAttempts + 1) : 1;
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
         {
-            var errorMessage = string.Join(", ", response.Errors.Select(e => e.Message));
-            _logger?.LogError("GraphQL query errors: {Errors}", errorMessage);
-            throw new GraphQLException(response.Errors.Select(e => new GraphQLError { Message = e.Message }).ToList());
+            try
+            {
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var response = await _httpClient.PostAsync(_endpoint, content, cancellationToken).ConfigureAwait(false);
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+                if (IsTransient(response.StatusCode) && attempt < attempts)
+                {
+                    _logger?.LogWarning("GraphQL request returned {StatusCode}; retrying ({Attempt}/{Attempts}).",
+                        (int)response.StatusCode, attempt, attempts);
+                    await DelayAsync(attempt, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                return ParseJson(body, (int)response.StatusCode);
+            }
+            catch (HttpRequestException ex) when (attempt < attempts)
+            {
+                lastException = ex;
+                _logger?.LogWarning(ex, "GraphQL request failed; retrying ({Attempt}/{Attempts}).", attempt, attempts);
+                await DelayAsync(attempt, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && attempt < attempts)
+            {
+                lastException = ex;
+                _logger?.LogWarning(ex, "GraphQL request timed out; retrying ({Attempt}/{Attempts}).", attempt, attempts);
+                await DelayAsync(attempt, cancellationToken).ConfigureAwait(false);
+            }
         }
 
-        return response.Data;
+        throw new GraphQLException(
+            [new GraphQLError { Message = lastException?.Message ?? "GraphQL request failed after retries." }]);
     }
 
-    /// <inheritdoc />
-    public async Task<TResponse> ExecuteMutationAsync<TResponse>(
-        string mutation,
-        Dictionary<string, object?>? variables = null,
-        CancellationToken cancellationToken = default)
+    private static GraphQLResponseEnvelope ParseJson(string body, int statusCode)
     {
-        _logger?.LogDebug("Executing GraphQL mutation: {Mutation}", mutation);
-
-        var request = new GraphQLRequest
+        try
         {
-            Query = mutation,
-            Variables = variables
-        };
-
-        var response = await _client.SendMutationAsync<TResponse>(request, cancellationToken);
-
-        if (response.Errors?.Any() == true)
+            using var document = JsonDocument.Parse(body);
+            return new GraphQLResponseEnvelope(document.RootElement.Clone(), body, statusCode);
+        }
+        catch (JsonException ex)
         {
-            var errorMessage = string.Join(", ", response.Errors.Select(e => e.Message));
-            _logger?.LogError("GraphQL mutation errors: {Errors}", errorMessage);
-            throw new GraphQLException(response.Errors.Select(e => new GraphQLError { Message = e.Message }).ToList());
+            throw new GraphQLException(
+                [new GraphQLError { Message = $"FreePBX returned an invalid JSON response: {ex.Message}" }],
+                body,
+                statusCode);
+        }
+    }
+
+    private static List<GraphQLError> ReadErrors(JsonElement root)
+    {
+        if (root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0)
+        {
+            return errors.Deserialize<List<GraphQLError>>(FreepbxJson.Response) ?? [];
         }
 
-        return response.Data;
+        return [];
     }
 
-    /// <inheritdoc />
-    public async Task<JsonDocument> ExecuteRawAsync(
-        string query,
-        Dictionary<string, object?>? variables = null,
-        CancellationToken cancellationToken = default)
+    private static void ThrowIfErrors(GraphQLResponseEnvelope response)
     {
-        _logger?.LogDebug("Executing raw GraphQL request: {Query}", query);
-
-        var request = new GraphQLRequest
+        var errors = ReadErrors(response.Root);
+        if (errors.Count > 0)
         {
-            Query = query,
-            Variables = variables
-        };
-
-        var response = await _client.SendQueryAsync<JsonDocument>(request, cancellationToken);
-
-        if (response.Errors?.Any() == true)
-        {
-            var errorMessage = string.Join(", ", response.Errors.Select(e => e.Message));
-            _logger?.LogError("GraphQL request errors: {Errors}", errorMessage);
-            throw new GraphQLException(response.Errors.Select(e => new GraphQLError { Message = e.Message }).ToList());
+            throw new GraphQLException(errors, response.Body, response.StatusCode);
         }
 
-        return response.Data;
+        if (!response.Root.TryGetProperty("data", out _) && response.StatusCode >= 400)
+        {
+            throw new GraphQLException(
+                [new GraphQLError { Message = $"FreePBX returned HTTP {response.StatusCode}." }],
+                response.Body,
+                response.StatusCode);
+        }
     }
-}
 
-/// <summary>
-/// Exception thrown when GraphQL errors occur
-/// </summary>
-public class GraphQLException : Exception
-{
-    public IReadOnlyList<GraphQLError> Errors { get; }
+    private static bool IsTransient(HttpStatusCode statusCode)
+        => (int)statusCode >= 500 || statusCode == HttpStatusCode.RequestTimeout;
 
-    public GraphQLException(IReadOnlyList<GraphQLError> errors)
-        : base(string.Join(", ", errors.Select(e => e.Message)))
+    private static Task DelayAsync(int attempt, CancellationToken cancellationToken)
+        => Task.Delay(TimeSpan.FromMilliseconds(200 * Math.Pow(2, attempt - 1)), cancellationToken);
+
+    private sealed class GraphQLRequestPayload
     {
-        Errors = errors;
-    }
-}
+        public string Query { get; set; } = string.Empty;
 
-/// <summary>
-/// Represents a GraphQL error
-/// </summary>
-public class GraphQLError
-{
-    public string Message { get; set; } = string.Empty;
-    public string? Path { get; set; }
-    public List<object>? Locations { get; set; }
+        public object? Variables { get; set; }
+
+        public string? OperationName { get; set; }
+    }
+
+    private sealed record GraphQLResponseEnvelope(JsonElement Root, string Body, int StatusCode);
 }

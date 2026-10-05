@@ -5,67 +5,66 @@ using Sengsara.Freepbx.Client;
 namespace Sengsara.Freepbx.Samples.BasicClient;
 
 /// <summary>
-/// Sample console application demonstrating basic FreePBX client usage
+/// Sample console application demonstrating basic FreePBX client usage.
 /// </summary>
 public class Program
 {
     public static async Task Main(string[] args)
     {
-        Console.WriteLine("FreePBX Client Sample");
-        Console.WriteLine("======================\n");
+        Console.WriteLine("FreePBX 17 Client Sample");
+        Console.WriteLine("========================\n");
 
-        // Create client options
-        var options = new FreepbxClientOptions("https://freepbx.example.com/graphql")
+        var baseUrl = Environment.GetEnvironmentVariable("FREEPBX_BASE_URL") ?? "https://freepbx.example.com";
+
+        var options = new FreepbxClientOptions(baseUrl)
         {
-            ApiKey = Environment.GetEnvironmentVariable("FREEPBX_API_KEY") ?? "your-api-key",
+            ClientId = Environment.GetEnvironmentVariable("FREEPBX_CLIENT_ID"),
+            ClientSecret = Environment.GetEnvironmentVariable("FREEPBX_CLIENT_SECRET"),
+            Username = Environment.GetEnvironmentVariable("FREEPBX_USERNAME"),
+            Password = Environment.GetEnvironmentVariable("FREEPBX_PASSWORD"),
+            AccessToken = Environment.GetEnvironmentVariable("FREEPBX_ACCESS_TOKEN"),
             TimeoutSeconds = 30,
-            EnableRetry = true,
-            MaxRetryAttempts = 3
+            AllowInsecureCertificates = true
         };
 
-        // Create a simple logger
         using var loggerFactory = LoggerFactory.Create(builder =>
         {
             builder.AddConsole();
             builder.SetMinimumLevel(LogLevel.Information);
         });
 
-        var logger = loggerFactory.CreateLogger<FreepbxClient>();
+        using var client = new FreepbxClient(options, loggerFactory);
 
-        // Create the client
-        using var client = new FreepbxClient(options, logger);
-
-        // Test connection
-        Console.WriteLine("Testing connection...");
+        Console.WriteLine($"Testing connection to {baseUrl}...");
         var isConnected = await client.TestConnectionAsync();
 
-        if (isConnected)
+        if (!isConnected)
         {
-            Console.WriteLine("✓ Connected successfully!\n");
-
-            // Get all extensions
-            Console.WriteLine("Fetching extensions...");
-            var extensions = await client.Extensions.GetAllAsync();
-
-            Console.WriteLine($"Found {extensions.Count} extensions:");
-            foreach (var ext in extensions.Take(5))
-            {
-                Console.WriteLine($"  - {ext.Extension}: {ext.Name}");
-            }
-
-            // Get all queues
-            Console.WriteLine("\nFetching queues...");
-            var queues = await client.Queues.GetAllAsync();
-
-            Console.WriteLine($"Found {queues.Count} queues:");
-            foreach (var queue in queues.Take(5))
-            {
-                Console.WriteLine($"  - {queue.Extension}: {queue.Description}");
-            }
+            Console.WriteLine("✗ Failed to connect to FreePBX. Check credentials and URL.");
+            return;
         }
-        else
+
+        Console.WriteLine("✓ Connected successfully!\n");
+
+        var extensions = await client.Extensions.GetAllAsync();
+        Console.WriteLine($"Found {extensions.Count} extensions:");
+        foreach (var ext in extensions.Take(5))
         {
-            Console.WriteLine("✗ Failed to connect to FreePBX");
+            Console.WriteLine($"  - {ext.ExtensionId}: {ext.Name} ({ext.Tech})");
+        }
+
+        var queues = await client.Queues.GetAllAsync();
+        Console.WriteLine($"\nFound {queues.Count} queues:");
+        foreach (var queue in queues.Take(5))
+        {
+            Console.WriteLine($"  - {queue.Extension}: {queue.Name}");
+        }
+
+        var ringGroups = await client.RingGroups.GetAllAsync();
+        Console.WriteLine($"\nFound {ringGroups.Count} ring groups:");
+        foreach (var group in ringGroups.Take(5))
+        {
+            Console.WriteLine($"  - {group.GroupNumber}: {group.Description}");
         }
 
         Console.WriteLine("\nSample completed!");

@@ -1,82 +1,100 @@
-using System;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Sengsara.Freepbx.Abstractions.Interfaces;
 using Sengsara.Freepbx.Abstractions.Interfaces.Services;
+using Sengsara.Freepbx.Authentication;
 using Sengsara.Freepbx.GraphQL;
+using Sengsara.Freepbx.Http;
+using Sengsara.Freepbx.Rest;
 using Sengsara.Freepbx.Services;
 
 namespace Sengsara.Freepbx.Client;
 
 /// <summary>
-/// Main client for interacting with FreePBX API
+/// Default implementation of <see cref="IFreepbxClient"/>.
 /// </summary>
-public class FreepbxClient : IFreepbxClient, IDisposable
+public sealed class FreepbxClient : IFreepbxClient
 {
-    private readonly HttpClient _httpClient;
-    private readonly GraphQLExecutor _graphQLExecutor;
-    private readonly Services.ExtensionService _extensionService;
-    private readonly Services.QueueService _queueService;
+    private readonly HttpClient _graphQLHttpClient;
+    private readonly HttpClient _restHttpClient;
+    private readonly FreepbxTokenProvider _tokenProvider;
+    private readonly ILogger<FreepbxClient> _logger;
     private bool _disposed;
 
     /// <inheritdoc />
-    public Abstractions.Interfaces.FreepbxClientOptions Options { get; }
+    public FreepbxClientOptions Options { get; }
 
     /// <inheritdoc />
-    public IGraphQLExecutor GraphQL => _graphQLExecutor;
+    public IGraphQLExecutor GraphQL { get; }
+
+    /// <inheritdoc />
+    public IExtensionService Extensions { get; }
+
+    /// <inheritdoc />
+    public ICoreUserService CoreUsers { get; }
+
+    /// <inheritdoc />
+    public ICoreDeviceService CoreDevices { get; }
+
+    /// <inheritdoc />
+    public IRingGroupService RingGroups { get; }
+
+    /// <inheritdoc />
+    public IInboundRouteService InboundRoutes { get; }
+
+    /// <inheritdoc />
+    public IRecordingService Recordings { get; }
+
+    /// <inheritdoc />
+    public IMusicOnHoldService MusicOnHold { get; }
+
+    /// <inheritdoc />
+    public IVoiceMailService VoiceMail { get; }
+
+    /// <inheritdoc />
+    public IFollowMeService FollowMe { get; }
+
+    /// <inheritdoc />
+    public ICdrService Cdrs { get; }
+
+    /// <inheritdoc />
+    public IQueueService Queues { get; }
 
     /// <summary>
-    /// Creates a new FreePBX client with the specified options
+    /// Creates a new FreePBX client.
     /// </summary>
-    /// <param name="options">Client configuration options</param>
-    /// <param name="logger">Optional logger</param>
-    public FreepbxClient(Client.FreepbxClientOptions options, ILogger<FreepbxClient>? logger = null)
+    /// <param name="options">Client options.</param>
+    /// <param name="loggerFactory">Optional logger factory.</param>
+    public FreepbxClient(FreepbxClientOptions options, ILoggerFactory? loggerFactory = null)
     {
         Options = options ?? throw new ArgumentNullException(nameof(options));
+        Options.Validate();
 
-        _httpClient = CreateHttpClient(options);
-        _graphQLExecutor = new GraphQLExecutor(_httpClient, options, null);
+        var factory = loggerFactory ?? NullLoggerFactory.Instance;
+        _logger = factory.CreateLogger<FreepbxClient>();
 
-        _extensionService = new Services.ExtensionService(this, null);
-        _queueService = new Services.QueueService(this, null);
-    }
+        _tokenProvider = new FreepbxTokenProvider(options, logger: factory.CreateLogger<FreepbxTokenProvider>());
 
-    /// <summary>
-    /// Gets the extension service
-    /// </summary>
-    public Abstractions.Interfaces.Services.IExtensionService Extensions => _extensionService;
+        _graphQLHttpClient = new HttpClient(new FreepbxAuthHandler(_tokenProvider, FreepbxHttpClientFactory.CreateHandler(options)));
+        _restHttpClient = new HttpClient(new FreepbxAuthHandler(_tokenProvider, FreepbxHttpClientFactory.CreateHandler(options)));
+        FreepbxHttpClientFactory.Apply(options, _graphQLHttpClient);
+        FreepbxHttpClientFactory.Apply(options, _restHttpClient);
 
-    /// <summary>
-    /// Gets the queue service
-    /// </summary>
-    public Abstractions.Interfaces.Services.IQueueService Queues => _queueService;
+        GraphQL = new GraphQLExecutor(_graphQLHttpClient, options, factory.CreateLogger<GraphQLExecutor>());
 
-    private static HttpClient CreateHttpClient(Abstractions.Interfaces.FreepbxClientOptions options)
-    {
-        var httpClient = new HttpClient
-        {
-            BaseAddress = new Uri(options.Endpoint),
-            Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds)
-        };
+        Extensions = new ExtensionService(GraphQL, factory.CreateLogger<ExtensionService>());
+        CoreUsers = new CoreUserService(GraphQL, factory.CreateLogger<CoreUserService>());
+        CoreDevices = new CoreDeviceService(GraphQL, factory.CreateLogger<CoreDeviceService>());
+        RingGroups = new RingGroupService(GraphQL, factory.CreateLogger<RingGroupService>());
+        InboundRoutes = new InboundRouteService(GraphQL, factory.CreateLogger<InboundRouteService>());
+        Recordings = new RecordingService(GraphQL, factory.CreateLogger<RecordingService>());
+        MusicOnHold = new MusicOnHoldService(GraphQL, factory.CreateLogger<MusicOnHoldService>());
+        VoiceMail = new VoiceMailService(GraphQL, factory.CreateLogger<VoiceMailService>());
+        FollowMe = new FollowMeService(GraphQL, factory.CreateLogger<FollowMeService>());
+        Cdrs = new CdrService(GraphQL, factory.CreateLogger<CdrService>());
 
-        // Add authentication headers
-        if (!string.IsNullOrWhiteSpace(options.ApiKey))
-        {
-            httpClient.DefaultRequestHeaders.Add("X-API-Key", options.ApiKey);
-        }
-
-        // Add basic auth if credentials provided
-        if (!string.IsNullOrWhiteSpace(options.Username) && !string.IsNullOrWhiteSpace(options.Password))
-        {
-            var credentials = Convert.ToBase64String(
-                System.Text.Encoding.ASCII.GetBytes($"{options.Username}:{options.Password}"));
-            httpClient.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
-        }
-
-        return httpClient;
+        var restClient = new FreepbxRestClient(_restHttpClient, options);
+        Queues = new QueueService(restClient, factory.CreateLogger<QueueService>());
     }
 
     /// <inheritdoc />
@@ -84,40 +102,27 @@ public class FreepbxClient : IFreepbxClient, IDisposable
     {
         try
         {
-            // Execute a simple introspection query to test the connection
-            var query = @"query { __schema { queryType { name } } }";
-            await _graphQLExecutor.ExecuteRawAsync(query, cancellationToken: cancellationToken);
+            await GraphQL.ExecuteRawAsync("query { __typename }", cancellationToken: cancellationToken).ConfigureAwait(false);
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "FreePBX connectivity test failed.");
             return false;
         }
     }
 
     /// <inheritdoc />
-    public async Task DisposeAsync()
-    {
-        if (!_disposed)
-        {
-            _httpClient.Dispose();
-            _disposed = true;
-        }
-
-        await Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Disposes the client
-    /// </summary>
     public void Dispose()
     {
-        if (!_disposed)
+        if (_disposed)
         {
-            _httpClient.Dispose();
-            _disposed = true;
+            return;
         }
 
-        GC.SuppressFinalize(this);
+        _graphQLHttpClient.Dispose();
+        _restHttpClient.Dispose();
+        _tokenProvider.Dispose();
+        _disposed = true;
     }
 }

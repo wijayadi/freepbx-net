@@ -1,4 +1,3 @@
-using System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -8,7 +7,7 @@ using Sengsara.Freepbx.Abstractions.Interfaces.Services;
 namespace Sengsara.Freepbx.Samples.WorkerService;
 
 /// <summary>
-/// Background worker that periodically syncs FreePBX data
+/// Background worker that periodically syncs FreePBX data.
 /// </summary>
 public class FreePbxSyncWorker : BackgroundService
 {
@@ -64,7 +63,7 @@ public class FreePbxSyncWorker : BackgroundService
         // Sync queue members
         foreach (var queue in queues)
         {
-            var members = await queueService.GetMembersAsync(queue.Id, cancellationToken);
+            var members = await queueService.GetMembersAsync(queue.Extension, cancellationToken);
             _logger.LogDebug("Queue {Extension} has {Count} members", queue.Extension, members.Count);
         }
 
@@ -79,13 +78,8 @@ public class Program
         Host.CreateDefaultBuilder(args)
             .ConfigureServices((hostContext, services) =>
             {
-                // Add FreePBX services
-                services.AddFreePbx(options =>
-                {
-                    options.Endpoint = hostContext.Configuration["Freepbx:Endpoint"] ?? "http://localhost:4000/graphql";
-                    options.ApiKey = hostContext.Configuration["Freepbx:ApiKey"];
-                    options.TimeoutSeconds = 30;
-                });
+                // Add FreePBX services from configuration.
+                services.AddFreePbxFromConfiguration(hostContext.Configuration);
 
                 // Add the background worker
                 services.AddHostedService<FreePbxSyncWorker>();

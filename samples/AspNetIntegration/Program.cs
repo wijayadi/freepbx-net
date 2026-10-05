@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -13,13 +12,8 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Add FreePBX services
-builder.Services.AddFreePbx(options =>
-{
-    options.Endpoint = builder.Configuration["Freepbx:Endpoint"] ?? "http://localhost:4000/graphql";
-    options.ApiKey = builder.Configuration["Freepbx:ApiKey"];
-    options.TimeoutSeconds = 30;
-});
+// Add FreePBX services from configuration (appsettings.json "FreePbx" section).
+builder.Services.AddFreePbxFromConfiguration(builder.Configuration);
 
 // Register sample services
 builder.Services.AddScoped<ExtensionEndpoints>();
@@ -40,7 +34,7 @@ app.MapControllers();
 app.Run();
 
 /// <summary>
-/// Sample API controller demonstrating FreePBX integration
+/// Sample service demonstrating FreePBX integration.
 /// </summary>
 public class ExtensionEndpoints
 {
@@ -58,9 +52,7 @@ public class ExtensionEndpoints
         _logger = logger;
     }
 
-    /// <summary>
-    /// Get all extensions
-    /// </summary>
+    /// <summary>Get all extensions.</summary>
     public async Task<IResult> GetExtensions()
     {
         try
@@ -75,9 +67,7 @@ public class ExtensionEndpoints
         }
     }
 
-    /// <summary>
-    /// Get all queues
-    /// </summary>
+    /// <summary>Get all queues.</summary>
     public async Task<IResult> GetQueues()
     {
         try

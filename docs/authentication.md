@@ -1,74 +1,76 @@
 # Authentication
 
-Sengsara.Freepbx supports multiple authentication methods for connecting to FreePBX.
+FreePBX 17 protects its API with an OAuth2 resource server. Bearer tokens are
+issued by the token endpoint (`/admin/api/api/token`, by default) and are valid
+for one hour.
 
-## API Key Authentication
+`Sengsara.Freepbx` requests, caches, and refreshes tokens automatically.
 
-The simplest way to authenticate is using an API key:
+## Client credentials (recommended for services)
 
 ```csharp
-var options = new FreepbxClientOptions("https://freepbx.example.com/graphql")
+var options = new FreepbxClientOptions("https://pbx.example.com")
 {
-    ApiKey = "your-api-key"
+    ClientId = "your-client-id",
+    ClientSecret = "your-client-secret",
+    Scope = "gql rest"
 };
-
-using var client = new FreepbxClient(options);
 ```
 
-## Basic Authentication
+This uses the `client_credentials` grant. Create the application in
+**Connectivity → API** with the **Client Credentials** grant.
 
-You can also use username and password:
+## Password grant
+
+The `password` grant authenticates a FreePBX User Management account. FreePBX
+requires a client id for this grant, so provide both sets of credentials:
 
 ```csharp
-var options = new FreepbxClientOptions("https://freepbx.example.com/graphql")
+var options = new FreepbxClientOptions("https://pbx.example.com")
 {
+    ClientId = "your-client-id",
+    ClientSecret = "your-client-secret",
     Username = "admin",
-    Password = "your-password"
+    Password = "your-password",
+    Scope = "gql rest"
 };
-
-using var client = new FreepbxClient(options);
 ```
 
-## Configuration File
+When both a client and a user are configured, the `password` grant is used.
 
-### appsettings.json
+## Static bearer token
 
-```json
-{
-  "Freepbx": {
-    "Endpoint": "https://freepbx.example.com/graphql",
-    "ApiKey": "your-api-key",
-    "Username": "admin",
-    "Password": "your-password",
-    "TimeoutSeconds": 30,
-    "EnableRetry": true,
-    "MaxRetryAttempts": 3
-  }
-}
-```
-
-### Environment Variables
-
-You can also use environment variables:
-
-```bash
-export FREEPBX_ENDPOINT="https://freepbx.example.com/graphql"
-export FREEPBX_API_KEY="your-api-key"
-```
-
-Then in your code:
+If your application already manages OAuth tokens, pass one directly:
 
 ```csharp
-var options = new FreepbxClientOptions(
-    Environment.GetEnvironmentVariable("FREEPBX_ENDPOINT")!)
+var options = new FreepbxClientOptions("https://pbx.example.com")
 {
-    ApiKey = Environment.GetEnvironmentVariable("FREEPBX_API_KEY")
+    AccessToken = "eyJ...",
+    AccessTokenExpiresAt = DateTimeOffset.UtcNow.AddMinutes(55) // optional
 };
 ```
 
-## Security Best Practices
+## Scopes
 
-1. **Never hardcode credentials** - Use configuration files or environment variables
-2. **Use API keys when possible** - They are more secure than basic auth
-3. **Rotate credentials regularly** - Update API keys periodically
-4. **Use HTTPS** - Always connect over SSL/TLS
+- `gql` - the GraphQL API (all modules)
+- `rest` - the REST API (needed for queues)
+- `gql rest` - both
+
+A scope string with multiple values is space separated.
+
+## Self-signed certificates
+
+For development instances with self-signed TLS certificates:
+
+```csharp
+options.AllowInsecureCertificates = true;
+```
+
+> Do not enable this in production.
+
+## Security best practices
+
+1. Never hardcode credentials - use configuration or environment variables.
+2. Grant the narrowest scope that still works for your integration.
+3. Rotate client secrets regularly.
+4. Always connect over HTTPS.

@@ -1,216 +1,187 @@
 using Microsoft.Extensions.Logging;
+using Sengsara.Freepbx.Abstractions.Interfaces;
 using Sengsara.Freepbx.Abstractions.Interfaces.Services;
 using Sengsara.Freepbx.Abstractions.Models;
-using Sengsara.Freepbx.Client;
 
 namespace Sengsara.Freepbx.Services;
 
 /// <summary>
-/// Service for managing FreePBX extensions
+/// Service for managing FreePBX Core extensions through GraphQL.
 /// </summary>
-public class ExtensionService : IExtensionService
+public sealed class ExtensionService : GraphQLServiceBase, IExtensionService
 {
-    private readonly FreepbxClient _client;
-    private readonly ILogger<ExtensionService>? _logger;
-
     private const string GetAllQuery = @"
         query GetExtensions {
-            extensions {
-                id
-                extension
-                name
-                email
-                department
-                description
-                outboundCid
-                deviceType
-                userLevel
-                createDate
-                modifyDate
-                enabled
-            }
+          fetchAllExtensions {
+            totalCount
+            count
+            extension { " + GraphQLFields.Extension + @" }
+          }
+        }";
+
+    private const string GetAllValidQuery = @"
+        query GetValidExtensions {
+          fetchAllValidExtensions {
+            totalCount
+            count
+            extension { " + GraphQLFields.Extension + @" }
+          }
         }";
 
     private const string GetByIdQuery = @"
-        query GetExtension($id: ID!) {
-            extension(id: $id) {
-                id
-                extension
-                name
-                email
-                department
-                description
-                outboundCid
-                deviceType
-                userLevel
-                createDate
-                modifyDate
-                enabled
-            }
+        query GetExtension($extensionId: ID) {
+          fetchExtension(extensionId: $extensionId) { " + GraphQLFields.Extension + @" }
         }";
 
     private const string CreateMutation = @"
-        mutation CreateExtension($input: CreateExtensionInput!) {
-            createExtension(input: $input) {
-                id
-                extension
-                name
-                email
-                department
-                description
-                outboundCid
-                deviceType
-                userLevel
-                createDate
-                modifyDate
-                enabled
-            }
+        mutation AddExtension($input: addExtensionInput!) {
+          addExtension(input: $input) { status message }
         }";
 
     private const string UpdateMutation = @"
-        mutation UpdateExtension($id: ID!, $input: UpdateExtensionInput!) {
-            updateExtension(id: $id, input: $input) {
-                id
-                extension
-                name
-                email
-                department
-                description
-                outboundCid
-                deviceType
-                userLevel
-                createDate
-                modifyDate
-                enabled
-            }
+        mutation UpdateExtension($input: updateExtensionInput!) {
+          updateExtension(input: $input) { status message }
         }";
 
     private const string DeleteMutation = @"
-        mutation DeleteExtension($id: ID!) {
-            deleteExtension(id: $id)
+        mutation DeleteExtension($input: deleteExtensionInput!) {
+          deleteExtension(input: $input) { status message }
         }";
 
-    public ExtensionService(FreepbxClient client, ILogger<ExtensionService>? logger = null)
+    private const string CreateRangeMutation = @"
+        mutation CreateRangeOfExtensions($input: CreateRangeofExtensionInput!) {
+          createRangeofExtension(input: $input) { status message }
+        }";
+
+    /// <summary>
+    /// Creates a new extension service.
+    /// </summary>
+    public ExtensionService(IGraphQLExecutor graphQL, ILogger<ExtensionService> logger)
+        : base(graphQL, logger)
     {
-        _client = client;
-        _logger = logger;
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<ExtensionDto>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        _logger?.LogInformation("Retrieving all extensions");
+        var response = await GraphQL.ExecuteQueryAsync<ExtensionsResponse>(GetAllQuery, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return response.FetchAllExtensions?.Extension ?? [];
+    }
 
-        var response = await _client.GraphQL.ExecuteQueryAsync<ExtensionsResponse>(
-            GetAllQuery,
-            cancellationToken: cancellationToken);
-
-        return response.Extensions ?? [];
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ExtensionDto>> GetAllValidAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await GraphQL.ExecuteQueryAsync<ExtensionsResponse>(GetAllValidQuery, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return response.FetchAllValidExtensions?.Extension ?? [];
     }
 
     /// <inheritdoc />
     public async Task<ExtensionDto?> GetByIdAsync(string extensionId, CancellationToken cancellationToken = default)
     {
-        _logger?.LogInformation("Retrieving extension with ID: {ExtensionId}", extensionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(extensionId);
 
-        var response = await _client.GraphQL.ExecuteQueryAsync<ExtensionResponse>(
+        var result = await GraphQL.TryExecuteQueryAsync<ExtensionResponse>(
             GetByIdQuery,
-            new Dictionary<string, object?> { ["id"] = extensionId },
-            cancellationToken);
+            new { extensionId },
+            cancellationToken).ConfigureAwait(false);
 
-        return response.Extension;
+        var extension = result.Data?.FetchExtension;
+        return string.IsNullOrEmpty(extension?.ExtensionId) ? null : extension;
     }
 
     /// <inheritdoc />
-    public async Task<ExtensionDto> CreateAsync(CreateExtensionRequest request, CancellationToken cancellationToken = default)
+    public async Task<MutationResult> CreateAsync(AddExtensionRequest request, CancellationToken cancellationToken = default)
     {
-        _logger?.LogInformation("Creating extension: {Extension}", request.Extension);
+        ArgumentNullException.ThrowIfNull(request);
 
-        var input = new Dictionary<string, object?>
-        {
-            ["extension"] = request.Extension,
-            ["name"] = request.Name,
-            ["email"] = request.Email,
-            ["department"] = request.Department,
-            ["description"] = request.Description,
-            ["outboundCid"] = request.OutboundCid
-        };
-
-        var response = await _client.GraphQL.ExecuteMutationAsync<CreateExtensionResponse>(
+        var response = await GraphQL.ExecuteMutationAsync<AddExtensionResponse>(
             CreateMutation,
-            new Dictionary<string, object?> { ["input"] = input },
-            cancellationToken);
+            new { input = request },
+            cancellationToken).ConfigureAwait(false);
 
-        _logger?.LogInformation("Extension created with ID: {ExtensionId}", response.CreateExtension.Id);
-
-        return response.CreateExtension;
+        Logger.LogInformation("Created extension {ExtensionId}: {Success}", request.ExtensionId, response.AddExtension?.Status);
+        return ToResult(response.AddExtension);
     }
 
     /// <inheritdoc />
-    public async Task<ExtensionDto> UpdateAsync(string extensionId, UpdateExtensionRequest request, CancellationToken cancellationToken = default)
+    public async Task<MutationResult> UpdateAsync(UpdateExtensionRequest request, CancellationToken cancellationToken = default)
     {
-        _logger?.LogInformation("Updating extension: {ExtensionId}", extensionId);
+        ArgumentNullException.ThrowIfNull(request);
 
-        var input = new Dictionary<string, object?>();
-
-        if (request.Name != null) input["name"] = request.Name;
-        if (request.Email != null) input["email"] = request.Email;
-        if (request.Department != null) input["department"] = request.Department;
-        if (request.Description != null) input["description"] = request.Description;
-        if (request.OutboundCid != null) input["outboundCid"] = request.OutboundCid;
-
-        var response = await _client.GraphQL.ExecuteMutationAsync<UpdateExtensionResponse>(
+        var response = await GraphQL.ExecuteMutationAsync<UpdateExtensionResponse>(
             UpdateMutation,
-            new Dictionary<string, object?>
-            {
-                ["id"] = extensionId,
-                ["input"] = input
-            },
-            cancellationToken);
+            new { input = request },
+            cancellationToken).ConfigureAwait(false);
 
-        _logger?.LogInformation("Extension updated: {ExtensionId}", extensionId);
-
-        return response.UpdateExtension;
+        Logger.LogInformation("Updated extension {ExtensionId}: {Success}", request.ExtensionId, response.UpdateExtension?.Status);
+        return ToResult(response.UpdateExtension);
     }
 
     /// <inheritdoc />
-    public async Task<bool> DeleteAsync(string extensionId, CancellationToken cancellationToken = default)
+    public async Task<MutationResult> DeleteAsync(string extensionId, CancellationToken cancellationToken = default)
     {
-        _logger?.LogInformation("Deleting extension: {ExtensionId}", extensionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(extensionId);
 
-        var response = await _client.GraphQL.ExecuteMutationAsync<DeleteExtensionResponse>(
+        var response = await GraphQL.ExecuteMutationAsync<DeleteExtensionResponse>(
             DeleteMutation,
-            new Dictionary<string, object?> { ["id"] = extensionId },
-            cancellationToken);
+            new { input = new { extensionId } },
+            cancellationToken).ConfigureAwait(false);
 
-        _logger?.LogInformation("Extension deleted: {ExtensionId}, Result: {Result}", extensionId, response.DeleteExtension);
-
-        return response.DeleteExtension;
+        Logger.LogInformation("Deleted extension {ExtensionId}: {Success}", extensionId, response.DeleteExtension?.Status);
+        return ToResult(response.DeleteExtension);
     }
 
-    // Response DTOs
-    private class ExtensionsResponse
+    /// <inheritdoc />
+    public async Task<MutationResult> CreateRangeAsync(CreateExtensionRangeRequest request, CancellationToken cancellationToken = default)
     {
-        public List<ExtensionDto>? Extensions { get; set; }
+        ArgumentNullException.ThrowIfNull(request);
+
+        var response = await GraphQL.ExecuteMutationAsync<CreateRangeResponse>(
+            CreateRangeMutation,
+            new { input = request },
+            cancellationToken).ConfigureAwait(false);
+
+        return ToResult(response.CreateRangeOfExtension);
     }
 
-    private class ExtensionResponse
+    private sealed class ExtensionsResponse
     {
-        public ExtensionDto? Extension { get; set; }
+        public ExtensionConnection? FetchAllExtensions { get; set; }
+
+        public ExtensionConnection? FetchAllValidExtensions { get; set; }
     }
 
-    private class CreateExtensionResponse
+    private sealed class ExtensionConnection
     {
-        public ExtensionDto CreateExtension { get; set; } = new();
+        public int? TotalCount { get; set; }
+
+        public int? Count { get; set; }
+
+        public List<ExtensionDto>? Extension { get; set; }
     }
 
-    private class UpdateExtensionResponse
+    private sealed class ExtensionResponse
     {
-        public ExtensionDto UpdateExtension { get; set; } = new();
+        public ExtensionDto? FetchExtension { get; set; }
     }
 
-    private class DeleteExtensionResponse
+    private sealed class AddExtensionResponse
     {
-        public bool DeleteExtension { get; set; }
+        public MutationPayload? AddExtension { get; set; }
+    }
+
+    private sealed class UpdateExtensionResponse
+    {
+        public MutationPayload? UpdateExtension { get; set; }
+    }
+
+    private sealed class DeleteExtensionResponse
+    {
+        public MutationPayload? DeleteExtension { get; set; }
+    }
+
+    private sealed class CreateRangeResponse
+    {
+        public MutationPayload? CreateRangeOfExtension { get; set; }
     }
 }

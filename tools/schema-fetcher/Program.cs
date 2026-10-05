@@ -1,200 +1,89 @@
 using System.Text.Json;
-using GraphQL;
-using GraphQL.Client.Http;
-using GraphQL.Client.Serializer.SystemTextJson;
+using Microsoft.Extensions.Logging;
+using Sengsara.Freepbx;
+using Sengsara.Freepbx.Client;
 
 namespace Sengsara.Freepbx.Tools.SchemaFetcher;
 
 /// <summary>
-/// Tool to fetch and save the GraphQL schema from FreePBX
+/// Fetches the live FreePBX GraphQL introspection schema and writes it to disk.
 /// </summary>
 public class Program
 {
-    public static async Task Main(string[] args)
+    private const string IntrospectionQuery = """
+        query IntrospectionQuery {
+          __schema {
+            queryType { name fields { name } }
+            mutationType { name fields { name } }
+            subscriptionType { name }
+            types {
+              kind
+              name
+              description
+              fields { name description args { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } }
+              inputFields { name description type { kind name ofType { kind name ofType { kind name } } } }
+              enumValues { name description }
+              interfaces { kind name }
+              possibleTypes { kind name }
+            }
+          }
+        }
+        """;
+
+    public static async Task<int> Main(string[] args)
     {
-        Console.WriteLine("FreePBX GraphQL Schema Fetcher");
-        Console.WriteLine("==============================\n");
+        Console.WriteLine("FreePBX 17 GraphQL Schema Fetcher");
+        Console.WriteLine("=================================\n");
 
-        // Get configuration
-        var endpoint = args.Length > 0 ? args[0] : Environment.GetEnvironmentVariable("FREEPBX_ENDPOINT");
-        var apiKey = Environment.GetEnvironmentVariable("FREEPBX_API_KEY");
-        var outputPath = args.Length > 1 ? args[1] : "schema.graphql";
+        var baseUrl = args.Length > 0 ? args[0] : Environment.GetEnvironmentVariable("FREEPBX_BASE_URL");
+        var outputPath = args.Length > 1 ? args[1] : "schema.json";
 
-        if (string.IsNullOrWhiteSpace(endpoint))
+        if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            Console.Error.WriteLine("Error: FreePBX endpoint is required");
-            Console.Error.WriteLine("Usage: SchemaFetcher <endpoint> [output-path]");
-            Console.Error.WriteLine("Or set FREEPBX_ENDPOINT environment variable");
-            return;
+            Console.Error.WriteLine("Usage: schema-fetcher <base-url> [output-path]");
+            Console.Error.WriteLine("Or set FREEPBX_BASE_URL.");
+            return 1;
         }
 
-        Console.WriteLine($"Fetching schema from: {endpoint}");
+        var options = new FreepbxClientOptions(baseUrl)
+        {
+            ClientId = Environment.GetEnvironmentVariable("FREEPBX_CLIENT_ID"),
+            ClientSecret = Environment.GetEnvironmentVariable("FREEPBX_CLIENT_SECRET"),
+            Username = Environment.GetEnvironmentVariable("FREEPBX_USERNAME"),
+            Password = Environment.GetEnvironmentVariable("FREEPBX_PASSWORD"),
+            AccessToken = Environment.GetEnvironmentVariable("FREEPBX_ACCESS_TOKEN"),
+            AllowInsecureCertificates = string.Equals(
+                Environment.GetEnvironmentVariable("FREEPBX_ALLOW_INSECURE"),
+                "true",
+                StringComparison.OrdinalIgnoreCase)
+        };
+
+        using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Warning));
+        using var client = new FreepbxClient(options, loggerFactory);
+
+        Console.WriteLine($"Fetching schema from {options.GraphQLUri}...");
 
         try
         {
-            var serializer = new SystemTextJsonSerializer(new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
+            using var document = await client.GraphQL.ExecuteRawAsync(IntrospectionQuery);
+            var json = JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(outputPath, json);
 
-            using var client = new GraphQLHttpClient(endpoint, serializer);
+            var schema = document.RootElement.GetProperty("__schema");
+            var queries = schema.GetProperty("queryType").GetProperty("fields").EnumerateArray()
+                .Select(f => f.GetProperty("name").GetString()).ToList();
+            var mutations = schema.GetProperty("mutationType").GetProperty("fields").EnumerateArray()
+                .Select(f => f.GetProperty("name").GetString()).ToList();
 
-            // Add authentication if provided
-            if (!string.IsNullOrWhiteSpace(apiKey))
-            {
-                client.HttpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);
-            }
-
-            // Introspection query
-            var request = new GraphQLRequest
-            {
-                Query = @"
-                    query IntrospectionQuery {
-                        __schema {
-                            types {
-                                kind
-                                name
-                                description
-                                fields {
-                                    name
-                                    description
-                                    args {
-                                        name
-                                        description
-                                        type {
-                                            kind
-                                            name
-                                            ofType {
-                                                kind
-                                                name
-                                                ofType {
-                                                    kind
-                                                    name
-                                                    ofType {
-                                                        kind
-                                                        name
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        defaultValue
-                                    }
-                                    type {
-                                        kind
-                                        name
-                                        ofType {
-                                            kind
-                                            name
-                                            ofType {
-                                                kind
-                                                name
-                                                ofType {
-                                                    kind
-                                                    name
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                inputFields {
-                                    name
-                                    description
-                                    type {
-                                        kind
-                                        name
-                                        ofType {
-                                            kind
-                                            name
-                                        }
-                                    }
-                                }
-                                interfaces {
-                                    kind
-                                    name
-                                }
-                                enumValues {
-                                    name
-                                    description
-                                }
-                                possibleTypes {
-                                    kind
-                                    name
-                                }
-                            }
-                            queryType { name }
-                            mutationType { name }
-                            subscriptionType { name }
-                            directives {
-                                name
-                                description
-                                locations
-                                args {
-                                    name
-                                    description
-                                    type {
-                                        kind
-                                        name
-                                    }
-                                    defaultValue
-                                }
-                            }
-                        }
-                    }"
-            };
-
-            var response = await client.SendQueryAsync<JsonElement>(request);
-
-            if (response.Errors?.Any() == true)
-            {
-                Console.Error.WriteLine("GraphQL Errors:");
-                foreach (var error in response.Errors)
-                {
-                    Console.Error.WriteLine($"  - {error.Message}");
-                }
-                return;
-            }
-
-            // Save the full introspection result
-            var jsonOptions = new JsonSerializerOptions
-            {
-                WriteIndented = true
-            };
-
-            var schemaJson = JsonSerializer.Serialize(response.Data, jsonOptions);
-            await File.WriteAllTextAsync(outputPath + ".json", schemaJson);
-
-            // Generate simplified SDL schema
-            var schema = response.Data.GetProperty("__schema");
-            var sdl = GenerateSDL(schema);
-
-            await File.WriteAllTextAsync(outputPath, sdl);
-
-            Console.WriteLine($"\nSchema saved to:");
-            Console.WriteLine($"  - SDL: {outputPath}");
-            Console.WriteLine($"  - JSON: {outputPath}.json");
-            Console.WriteLine("\nDone!");
+            Console.WriteLine($"\nWrote introspection to {outputPath}");
+            Console.WriteLine($"Queries ({queries.Count}): {string.Join(", ", queries)}");
+            Console.WriteLine($"Mutations ({mutations.Count}): {string.Join(", ", mutations)}");
+            return 0;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
-            Console.Error.WriteLine(ex.StackTrace);
+            return 1;
         }
     }
-
-    private static string GenerateSDL(JsonElement schema)
-    {
-        var lines = new List<string> { "schema {", "  query: Query", "  mutation: Mutation", "}", "" };
-
-        // Get query type
-        var queryType = schema.GetProperty("queryType");
-        lines.Add($"type Query {queryType.GetProperty("name").GetString()?.Replace("Query", "") ?? ""} {GetBraceBlock()}");
-        lines.Add("");
-
-        // This is a simplified SDL generator
-        // A full implementation would traverse all types
-
-        return string.Join(Environment.NewLine, lines);
-    }
-
-    private static string GetBraceBlock() => "{ }";
 }

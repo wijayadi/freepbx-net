@@ -52,3 +52,7 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+# Local FreePBX test credentials (never commit)
+freepbx.test.json
+.env
+*.local.json

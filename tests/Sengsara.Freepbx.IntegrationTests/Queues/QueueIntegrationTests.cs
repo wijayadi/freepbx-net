@@ -2,29 +2,63 @@ using Xunit;
 
 namespace Sengsara.Freepbx.IntegrationTests.Queues;
 
+[Collection("FreePbx")]
 public class QueueIntegrationTests
 {
-    [Fact(Skip = "Requires FreePBX instance")]
+    private readonly FreePbxFixture _fixture;
+
+    public QueueIntegrationTests(FreePbxFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    [Fact]
     public async Task GetAllQueues_ShouldReturnList()
     {
-        // Integration test - requires running FreePBX instance
-        await Task.CompletedTask;
-        Assert.True(true);
+        if (!_fixture.IsAvailable)
+        {
+            return;
+        }
+
+        var queues = await _fixture.Client!.Queues.GetAllAsync();
+
+        Assert.NotNull(queues);
+        Assert.All(queues, q => Assert.False(string.IsNullOrWhiteSpace(q.Extension)));
     }
 
-    [Fact(Skip = "Requires FreePBX instance")]
-    public async Task CreateQueue_ShouldReturnCreatedQueue()
+    [Fact]
+    public async Task GetQueueMembers_ForFirstQueue_ShouldReturnMembers()
     {
-        // Integration test - requires running FreePBX instance
-        await Task.CompletedTask;
-        Assert.True(true);
+        if (!_fixture.IsAvailable)
+        {
+            return;
+        }
+
+        var queues = await _fixture.Client!.Queues.GetAllAsync();
+        var first = queues.FirstOrDefault();
+        if (first is null)
+        {
+            return;
+        }
+
+        var members = await _fixture.Client.Queues.GetMembersAsync(first.Extension);
+        var queue = await _fixture.Client.Queues.GetByIdAsync(first.Extension);
+
+        Assert.NotNull(members);
+        Assert.NotNull(queue);
     }
 
-    [Fact(Skip = "Requires FreePBX instance")]
-    public async Task AddMember_ShouldAddMemberToQueue()
+    [Fact]
+    public async Task GetAllMembers_ShouldReturnDictionary()
     {
-        // Integration test - requires running FreePBX instance
-        await Task.CompletedTask;
-        Assert.True(true);
+        if (!_fixture.IsAvailable)
+        {
+            return;
+        }
+
+        var members = await _fixture.Client!.Queues.GetAllMembersAsync();
+
+        Assert.NotNull(members);
+        Assert.All(members.Values, m => Assert.NotNull(m));
     }
 }

@@ -1,69 +1,86 @@
 # Extensions
 
-Extensions represent individual phone lines or devices in FreePBX.
+Extensions are managed through `client.Extensions`.
 
-## Getting Extensions
-
-### Get All Extensions
+## Read
 
 ```csharp
 var extensions = await client.Extensions.GetAllAsync();
-```
+var valid = await client.Extensions.GetAllValidAsync();
 
-### Get Extension by ID
-
-```csharp
-var extension = await client.Extensions.GetByIdAsync("123");
-```
-
-## Creating Extensions
-
-```csharp
-var request = new CreateExtensionRequest
+var extension = await client.Extensions.GetByIdAsync("101");
+if (extension is not null)
 {
-    Extension = "1001",
+    Console.WriteLine($"{extension.ExtensionId} {extension.Name} ({extension.Tech})");
+    Console.WriteLine($"Device: {extension.CoreDevice?.Dial}");
+}
+```
+
+`GetByIdAsync` returns `null` when the extension does not exist.
+
+## Create
+
+```csharp
+var result = await client.Extensions.CreateAsync(new AddExtensionRequest
+{
+    ExtensionId = "101",
     Name = "John Doe",
     Email = "john@example.com",
-    Department = "Sales",
-    Description = "Sales team member",
-    OutboundCid = 5551234567
-};
+    Tech = "pjsip",
+    VmEnable = true,
+    VmPassword = "101",
+    OutboundCid = "\"John Doe\" <5551234567>"
+});
 
-var created = await client.Extensions.CreateAsync(request);
+if (!result.Success)
+{
+    Console.WriteLine(result.Message);
+}
 ```
 
-## Updating Extensions
+FreePBX mutations return a status flag and a message, exposed through
+`MutationResult`.
+
+## Create a range
 
 ```csharp
-var request = new UpdateExtensionRequest
+var result = await client.Extensions.CreateRangeAsync(new CreateExtensionRangeRequest
 {
+    StartExtension = 200,
+    NumberOfExtensions = 10,
+    Name = "Agent",
+    Email = "agents@example.com",
+    Tech = "pjsip"
+});
+```
+
+## Update
+
+```csharp
+var result = await client.Extensions.UpdateAsync(new UpdateExtensionRequest
+{
+    ExtensionId = "101",
     Name = "John Smith",
     Email = "john.smith@example.com",
-    Department = "Marketing"
-};
-
-var updated = await client.Extensions.UpdateAsync("123", request);
+    VmEnable = false
+});
 ```
 
-## Deleting Extensions
+## Delete
 
 ```csharp
-var deleted = await client.Extensions.DeleteAsync("123");
+var result = await client.Extensions.DeleteAsync("101");
 ```
 
-## Extension Model
+## Model
+
+`ExtensionDto` mirrors the FreePBX `extension` type:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| Id | string | Unique identifier |
-| Extension | string | Extension number |
-| Name | string | Display name |
-| Email | string? | Email address |
-| Department | string? | Department |
-| Description | string? | Description |
-| OutboundCid | int? | Outbound Caller ID |
-| DeviceType | string? | Type of device |
-| UserLevel | string? | User permission level |
-| CreateDate | DateTime? | Creation date |
-| ModifyDate | DateTime? | Last modification date |
-| Enabled | bool | Whether extension is enabled |
+| `Id` | string? | Relay global id (may be empty on some builds) |
+| `ExtensionId` | string | Extension number |
+| `Tech` | string? | Technology driver (`pjsip`, `sip`, ...) |
+| `User` | `CoreUserDto?` | Attached core user |
+| `CoreDevice` | `CoreDeviceDto?` | Attached core device |
+| `Name` | string? | Convenience accessor for `User.Name` |

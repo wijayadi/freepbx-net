@@ -1,51 +1,27 @@
 # Sengsara.Freepbx
 
-.NET library for interacting with FreePBX through its GraphQL API.
+.NET client for the **FreePBX 17** GraphQL and REST APIs.
 
-## Overview
-
-Sengsara.Freepbx provides a clean, type-safe .NET API for managing FreePBX extensions, queues, and agents through GraphQL. Designed for modern .NET applications with full dependency injection support.
+`Sengsara.Freepbx` provides a strongly typed, dependency-injection friendly way to
+manage the standard FreePBX objects: extensions, core users, core devices, ring
+groups, inbound routes (DIDs), recordings, music on hold, voicemail, follow me,
+call detail records, and queues.
 
 ## Features
 
-- Full support for FreePBX GraphQL API
-- Strongly-typed models for Extensions, Queues, and Agents
-- Dependency injection integration for ASP.NET Core
-- Comprehensive error handling
-- Request retry with Polly
-- Logging support
-- Source generator for type-safe GraphQL queries (coming soon)
+- OAuth2 authentication (`client_credentials`, `password`, or a static bearer token)
+  with automatic token caching and refresh
+- Strongly typed models for the standard FreePBX 17 objects
+- Relay aware GraphQL executor with retry, logging, and rich error reporting
+- REST support for queues (queues are not exposed through GraphQL on FreePBX 17)
+- Dependency injection integration and `appsettings.json` binding
+- Full async / `CancellationToken` support
 
-## Projects
+## Requirements
 
-| Project | Description |
-|---------|-------------|
-| `Sengsara.Freepbx.Abstractions` | Shared interfaces and models |
-| `Sengsara.Freepbx` | Main client library |
-| `Sengsara.Freepbx.SourceGen` | Source generator for GraphQL |
-| `Sengsara.Freepbx.UnitTests` | Unit tests |
-| `Sengsara.Freepbx.IntegrationTests` | Integration tests |
-| `Sengsara.Freepbx.ContractTests` | Schema contract tests |
-
-## Quick Start
-
-```csharp
-using Sengsara.Freepbx;
-using Sengsara.Freepbx.Client;
-
-var options = new FreepbxClientOptions("https://your-freepbx.com/graphql")
-{
-    ApiKey = "your-api-key"
-};
-
-using var client = new FreepbxClient(options);
-
-// Get extensions
-var extensions = await client.Extensions.GetAllAsync();
-
-// Get queues  
-var queues = await client.Queues.GetAllAsync();
-```
+- .NET 8.0 or higher
+- FreePBX 17 with the `api` module installed and enabled
+- An OAuth2 application registered under **Connectivity → API**
 
 ## Installation
 
@@ -53,23 +29,80 @@ var queues = await client.Queues.GetAllAsync();
 dotnet add package Sengsara.Freepbx
 ```
 
+## Quick start
+
+```csharp
+using Sengsara.Freepbx;
+using Sengsara.Freepbx.Client;
+
+var options = new FreepbxClientOptions("https://pbx.example.com")
+{
+    ClientId = "your-client-id",
+    ClientSecret = "your-client-secret",
+    Scope = "gql rest"
+};
+
+using var client = new FreepbxClient(options);
+
+if (await client.TestConnectionAsync())
+{
+    foreach (var extension in await client.Extensions.GetAllAsync())
+    {
+        Console.WriteLine($"{extension.ExtensionId}: {extension.Name}");
+    }
+
+    foreach (var queue in await client.Queues.GetAllAsync())
+    {
+        Console.WriteLine($"{queue.Extension}: {queue.Name}");
+    }
+}
+```
+
+## Dependency injection
+
+```csharp
+builder.Services.AddFreePbxFromConfiguration(builder.Configuration);
+```
+
+```json
+{
+  "FreePbx": {
+    "BaseUrl": "https://pbx.example.com",
+    "ClientId": "your-client-id",
+    "ClientSecret": "your-client-secret",
+    "Scope": "gql rest"
+  }
+}
+```
+
+## API surface
+
+| Service | GraphQL / REST |
+|---------|----------------|
+| `client.Extensions` | GraphQL (`fetchAllExtensions`, `fetchExtension`, `addExtension`, `updateExtension`, `deleteExtension`) |
+| `client.CoreUsers` | GraphQL (`allCoreUsers`, `coreUser`, `addCoreUser`, `updateCoreUser`, `removeCoreUser`) |
+| `client.CoreDevices` | GraphQL (`fetchAllCoreDevices`, `fetchCoreDevice`, `addCoreDevice`, `updateCoreDevice`, `deleteCoreDevice`) |
+| `client.RingGroups` | GraphQL (`fetchAllRingGroups`, `fetchRingGroup`, `addRingGroup`, `updateRingGroup`, `deleteRingGroup`) |
+| `client.InboundRoutes` | GraphQL (`allInboundRoutes`, `inboundRoute`, `addInboundRoute`, `updateInboundRoute`, `removeInboundRoute`) |
+| `client.Recordings` | GraphQL |
+| `client.MusicOnHold` | GraphQL |
+| `client.VoiceMail` | GraphQL |
+| `client.FollowMe` | GraphQL |
+| `client.Cdrs` | GraphQL |
+| `client.Queues` | REST |
+
 ## Documentation
 
-- [Getting Started](docs/getting-started.md)
+- [Getting started](docs/getting-started.md)
 - [Authentication](docs/authentication.md)
+- [Configuration](docs/configuration.md)
 - [Extensions](docs/extensions.md)
+- [Core users and devices](docs/core-users-devices.md)
+- [Ring groups and inbound routes](docs/ring-groups-and-routes.md)
 - [Queues](docs/queues.md)
-- [Agents](docs/agents.md)
-
-## Requirements
-
-- .NET 8.0 or higher
-- FreePBX with GraphQL API module
+- [Recordings, music on hold, voicemail and follow me](docs/media-and-voicemail.md)
+- [Call detail records](docs/cdrs.md)
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please read our [contributing guidelines](CONTRIBUTING.md) first.
